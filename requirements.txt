@@ -1,0 +1,7 @@
+torch
+transformers
+datasets
+tokenizers
+librosa
+ffmpeg-python
+flask
