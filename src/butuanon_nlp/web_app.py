@@ -639,11 +639,14 @@ def create_app() -> Flask:
         audio.save(tmp_path)
 
         backend = registry.get('whisper')
+        translator = registry.get('nllb')
         if not backend or not isinstance(backend, SpeechModel):
             return jsonify({'error': 'Whisper backend not available'}), 500
 
         transcription = backend.transcribe(tmp_path, task="transcribe")
-        translation = backend.transcribe(tmp_path, task="translate")
+        translation = ""
+        if translator and isinstance(translator, TranslationModel):
+            translation = translator.translate(transcription, source_lang="ceb_Latn", target_lang="eng_Latn")
 
         try:
             os.unlink(tmp_path)
