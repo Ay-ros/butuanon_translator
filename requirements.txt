@@ -2,6 +2,11 @@ torch
 transformers
 datasets
 tokenizers
+sentencepiece
 librosa
+soundfile
+scipy
 ffmpeg-python
 flask
+openai-whisper
+pyttsx3

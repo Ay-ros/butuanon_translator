@@ -1,25 +1,32 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import os
+import tempfile
 from pathlib import Path
 
-from flask import Flask, jsonify, request, render_template_string
+from flask import Flask, jsonify, request, render_template_string, send_file
 
 from .models import (
     TranslationModel,
     SpeechModel,
+    HuggingFaceAdapter,
     create_default_model_registry,
 )
 from .preprocessing import phoneticize_text
 from .tokenizer import GlottalAwareTokenizer
 from .training import build_task_training_workflow, summarize_training_workflow
-from .models import HuggingFaceAdapter
 
 registry = create_default_model_registry()
 tokenizer = GlottalAwareTokenizer()
 
+# Directory for uploaded audio files
+_UPLOAD_DIR = Path(tempfile.gettempdir()) / "butuanon_uploads"
+_UPLOAD_DIR.mkdir(exist_ok=True)
+
 
 def create_app() -> Flask:
     app = Flask(__name__, template_folder=str(Path(__file__).resolve().parent / 'templates'))
+    app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB upload limit
 
     @app.route('/')
     def home():
@@ -30,557 +37,550 @@ def create_app() -> Flask:
             <head>
                 <meta charset="utf-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1" />
-                <title>BisayaHub</title>
+                <title>BisayaHub — Butuanon NLP Platform</title>
+                <meta name="description" content="Translate, transcribe, and synthesise Butuanon speech using NLLB-200, Whisper, and MMS-TTS — all running locally." />
+                <link rel="preconnect" href="https://fonts.googleapis.com" />
+                <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+                <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
                 <style>
                     :root {
                         font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
                         color: #191c1e;
-                        background: #f7f9fb;
                         --surface: rgba(255, 255, 255, 0.88);
                         --surface-strong: #ffffff;
                         --surface-muted: #eef1f5;
                         --border: rgba(207, 217, 229, 0.85);
-                        --shadow: 0 28px 80px rgba(15, 23, 42, 0.08);
+                        --shadow: 0 20px 60px rgba(15, 23, 42, 0.07);
                         --accent: #400010;
                         --accent-soft: #f6e5eb;
                         --secondary: #505f76;
+                        --success: #0d7d4d;
+                        --success-bg: #e6f7ef;
+                        --warn: #b45309;
+                        --warn-bg: #fef3c7;
                     }
 
-                    * {
-                        box-sizing: border-box;
-                    }
+                    * { box-sizing: border-box; margin: 0; }
 
                     html, body {
-                        margin: 0;
                         min-height: 100%;
-                        background: radial-gradient(circle at top left, rgba(64, 0, 16, 0.12), transparent 25%), radial-gradient(circle at 80% 10%, rgba(34, 45, 69, 0.08), transparent 22%), #f7f9fb;
+                        background: radial-gradient(ellipse at 20% 0%, rgba(64,0,16,0.09), transparent 50%),
+                                    radial-gradient(ellipse at 80% 5%, rgba(34,45,69,0.06), transparent 40%),
+                                    #f7f9fb;
                     }
 
-                    body {
-                        color: #191c1e;
-                    }
+                    body { color: #191c1e; }
 
-                    button, select, textarea, input {
-                        font: inherit;
-                    }
+                    button, select, textarea, input { font: inherit; }
 
-                    .site-shell {
-                        max-width: 1200px;
-                        margin: 0 auto;
-                        padding: 32px 24px 48px;
-                    }
+                    /* ── Shell ────────────────────────────────────────── */
+                    .shell { max-width: 1140px; margin: 0 auto; padding: 28px 22px 56px; }
 
+                    /* ── Top bar ──────────────────────────────────────── */
                     .topbar {
-                        display: flex;
-                        flex-wrap: wrap;
-                        justify-content: space-between;
-                        gap: 18px;
-                        align-items: center;
-                        padding: 22px 26px;
-                        border-radius: 28px;
-                        background: rgba(255, 255, 255, 0.84);
-                        border: 1px solid var(--border);
-                        box-shadow: var(--shadow);
-                        backdrop-filter: blur(15px);
-                        margin-bottom: 32px;
+                        display: flex; flex-wrap: wrap; justify-content: space-between;
+                        gap: 16px; align-items: center;
+                        padding: 18px 24px; border-radius: 24px;
+                        background: rgba(255,255,255,0.82); border: 1px solid var(--border);
+                        box-shadow: var(--shadow); backdrop-filter: blur(14px);
+                        margin-bottom: 28px;
                     }
-
-                    .brand {
-                        display: flex;
-                        align-items: center;
-                        gap: 16px;
-                    }
-
+                    .brand { display: flex; align-items: center; gap: 14px; }
                     .brand__mark {
-                        width: 52px;
-                        height: 52px;
-                        border-radius: 18px;
-                        background: var(--accent);
-                        color: white;
-                        display: grid;
-                        place-items: center;
-                        font-weight: 800;
-                        letter-spacing: -0.05em;
+                        width: 46px; height: 46px; border-radius: 14px;
+                        background: var(--accent); color: white;
+                        display: grid; place-items: center; font-weight: 800; font-size: 1.1rem;
                     }
+                    .brand__title { font-size: 1.55rem; font-weight: 800; letter-spacing: -0.03em; }
+                    .brand__sub { font-size: 0.88rem; color: var(--secondary); font-weight: 500; margin-top: 2px; }
+                    .nav-links { display: flex; gap: 20px; flex-wrap: wrap; }
+                    .nav-links a { text-decoration: none; color: var(--secondary); font-weight: 700; font-size: 0.92rem; }
+                    .nav-links a.active { color: var(--accent); }
 
-                    .brand__title {
-                        margin: 0;
-                        font-size: 1.8rem;
-                        letter-spacing: -0.03em;
-                    }
-
-                    .brand__subtitle {
-                        margin: 4px 0 0;
-                        font-size: 0.95rem;
-                        color: var(--secondary);
-                        font-weight: 500;
-                    }
-
-                    .nav-links {
-                        display: flex;
-                        align-items: center;
-                        gap: 24px;
-                        flex-wrap: wrap;
-                    }
-
-                    .nav-links a {
-                        text-decoration: none;
-                        color: var(--secondary);
-                        font-weight: 700;
-                    }
-
-                    .nav-links a.active {
-                        color: #131b2e;
-                    }
-
+                    /* ── Hero ─────────────────────────────────────────── */
                     .hero {
-                        padding: 42px 42px 40px;
-                        border-radius: 32px;
-                        background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(240,244,249,0.95));
-                        border: 1px solid var(--border);
-                        box-shadow: var(--shadow);
-                        margin-bottom: 32px;
+                        padding: 36px 38px 34px; border-radius: 28px;
+                        background: linear-gradient(170deg, rgba(255,255,255,0.93), rgba(238,241,245,0.96));
+                        border: 1px solid var(--border); box-shadow: var(--shadow);
+                        margin-bottom: 28px;
                     }
-
                     .hero h1 {
-                        margin: 0 0 16px;
-                        font-size: clamp(3rem, 4.5vw, 4.8rem);
-                        line-height: 0.98;
-                        letter-spacing: -0.06em;
+                        font-size: clamp(2.4rem, 4vw, 3.8rem);
+                        line-height: 1.02; letter-spacing: -0.05em; margin-bottom: 14px;
                     }
+                    .hero p { max-width: 700px; font-size: 1rem; color: var(--secondary); line-height: 1.7; }
 
-                    .hero p {
-                        margin: 0;
-                        max-width: 760px;
-                        font-size: 1.05rem;
-                        color: var(--secondary);
-                        line-height: 1.8;
+                    /* ── Badges ───────────────────────────────────────── */
+                    .tag {
+                        display: inline-flex; padding: 8px 14px; border-radius: 999px;
+                        font-weight: 700; font-size: 0.82rem; width: fit-content;
                     }
+                    .tag--live { background: var(--success-bg); color: var(--success); }
+                    .tag--accent { background: var(--accent-soft); color: var(--accent); }
+                    .tag--muted { background: #eef1f5; color: var(--secondary); }
 
-                    .badge {
-                        display: inline-flex;
-                        padding: 12px 16px;
-                        border-radius: 999px;
-                        background: var(--accent-soft);
-                        color: var(--accent);
-                        font-weight: 700;
-                        margin-top: 22px;
-                        width: fit-content;
-                    }
+                    /* ── Grid ─────────────────────────────────────────── */
+                    .grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 22px; }
+                    .col { display: grid; gap: 20px; align-content: start; }
 
-                    .main-grid {
-                        display: grid;
-                        grid-template-columns: 1.5fr 0.9fr;
-                        gap: 26px;
-                    }
-
+                    /* ── Card ─────────────────────────────────────────── */
                     .card {
-                        background: var(--surface);
-                        border-radius: 28px;
-                        border: 1px solid var(--border);
-                        box-shadow: var(--shadow);
-                        padding: 26px;
+                        background: var(--surface); border-radius: 24px;
+                        border: 1px solid var(--border); box-shadow: var(--shadow);
+                        padding: 24px; display: grid; gap: 16px;
+                    }
+                    .card__head { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+                    .card__head h2 { font-size: 1.15rem; letter-spacing: -0.02em; }
+
+                    /* ── Form elements ────────────────────────────────── */
+                    .lbl { text-transform: uppercase; letter-spacing: 0.14em; font-size: 0.76rem; color: var(--secondary); font-weight: 700; }
+                    .sel, .inp, .txa {
+                        width: 100%; border-radius: 16px; border: 1px solid #d8dadc;
+                        background: #f7f9fb; color: #191c1e; padding: 14px 16px;
+                        transition: border-color 0.2s, box-shadow 0.2s;
+                    }
+                    .sel { appearance: none; }
+                    .txa { min-height: 170px; resize: vertical; line-height: 1.8; }
+                    .sel:focus, .inp:focus, .txa:focus {
+                        outline: none; border-color: var(--accent);
+                        box-shadow: 0 0 0 3px rgba(64,0,16,0.07);
                     }
 
-                    .card h2 {
-                        margin: 0 0 18px;
-                        font-size: 1.25rem;
-                        letter-spacing: -0.02em;
+                    /* ── Buttons ──────────────────────────────────────── */
+                    .btns { display: flex; gap: 12px; flex-wrap: wrap; }
+                    .btn {
+                        display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+                        padding: 13px 22px; border-radius: 16px; border: none;
+                        background: var(--accent); color: white; font-weight: 700;
+                        cursor: pointer; transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
+                        font-size: 0.92rem;
+                    }
+                    .btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 14px 28px rgba(64,0,16,0.16); }
+                    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+                    .btn--outline {
+                        background: white; color: var(--accent);
+                        border: 1.5px solid rgba(64,0,16,0.2);
+                    }
+                    .btn--outline:hover:not(:disabled) { background: var(--accent-soft); }
+
+                    /* ── Spinner ──────────────────────────────────────── */
+                    .spin {
+                        display: inline-block; width: 14px; height: 14px;
+                        border: 2.5px solid rgba(255,255,255,0.3); border-top-color: white;
+                        border-radius: 50%; animation: spin 0.65s linear infinite;
+                    }
+                    .spin--dark { border-color: rgba(64,0,16,0.15); border-top-color: var(--accent); }
+                    @keyframes spin { to { transform: rotate(360deg); } }
+
+                    /* ── Output panels ────────────────────────────────── */
+                    .out { color: var(--secondary); line-height: 1.7; white-space: pre-wrap; font-size: 0.95rem; }
+                    .out--result { color: #191c1e; font-size: 1.08rem; font-weight: 500; min-height: 32px; }
+
+                    /* ── Token chips ──────────────────────────────────── */
+                    .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+                    .chip {
+                        padding: 4px 9px; border-radius: 7px;
+                        background: var(--accent-soft); color: var(--accent);
+                        font-size: 0.82rem; font-weight: 600;
+                        font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
                     }
 
-                    .section-grid {
-                        display: grid;
-                        gap: 22px;
+                    /* ── File upload ──────────────────────────────────── */
+                    .upload {
+                        border: 2px dashed rgba(64,0,16,0.15); border-radius: 16px;
+                        padding: 18px; text-align: center; cursor: pointer;
+                        transition: border-color 0.2s, background 0.2s;
+                        color: var(--secondary); font-weight: 600; font-size: 0.9rem;
+                        position: relative;
+                    }
+                    .upload:hover { border-color: var(--accent); background: rgba(64,0,16,0.02); }
+                    .upload.ok { border-color: var(--success); background: var(--success-bg); color: var(--success); }
+                    .upload input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+                    /* ── Audio player ─────────────────────────────────── */
+                    audio { width: 100%; border-radius: 10px; margin-top: 6px; }
+
+                    /* ── Phonetic annotation ──────────────────────────── */
+                    .phon {
+                        padding: 14px 18px; border-radius: 14px;
+                        background: #fdf6f0; border: 1px solid #f0e0d0;
+                        font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+                        font-size: 0.9rem; color: #7c4a1a; line-height: 1.6;
                     }
 
-                    .field-group {
-                        display: grid;
-                        gap: 16px;
+                    /* ── History ──────────────────────────────────────── */
+                    .hist {
+                        padding: 14px 16px; border-radius: 14px;
+                        background: #f9fafb; border: 1px solid rgba(227,232,240,0.95);
                     }
+                    .hist strong { display: block; margin-bottom: 4px; font-size: 0.92rem; }
+                    .hist span { color: var(--secondary); font-size: 0.86rem; }
 
-                    .select-field,
-                    .text-field,
-                    .textarea-field {
-                        width: 100%;
-                        border-radius: 20px;
-                        border: 1px solid #d8dadc;
-                        background: #f7f9fb;
-                        color: #191c1e;
-                        padding: 16px 18px;
+                    /* ── Architecture compact ─────────────────────────── */
+                    .arch-list { list-style: none; padding: 0; display: grid; gap: 8px; }
+                    .arch-list li {
+                        display: flex; align-items: baseline; gap: 8px;
+                        font-size: 0.88rem; color: var(--secondary); line-height: 1.5;
                     }
+                    .arch-list li strong { color: #191c1e; white-space: nowrap; }
 
-                    .select-field {
-                        appearance: none;
-                    }
-
-                    .textarea-field {
-                        min-height: 210px;
-                        resize: vertical;
-                        line-height: 1.85;
-                    }
-
-                    .textarea-field:focus,
-                    .select-field:focus,
-                    .text-field:focus {
-                        outline: none;
-                        border-color: var(--accent);
-                        box-shadow: 0 0 0 4px rgba(64, 0, 16, 0.08);
-                    }
-
-                    .button-row {
-                        display: flex;
-                        gap: 16px;
-                        flex-wrap: wrap;
-                        align-items: center;
-                        margin-top: 6px;
-                    }
-
-                    .button {
-                        display: inline-flex;
-                        align-items: center;
-                        justify-content: center;
-                        padding: 16px 24px;
-                        border-radius: 18px;
-                        border: none;
-                        background: var(--accent);
-                        color: white;
-                        font-weight: 700;
-                        cursor: pointer;
-                        transition: transform 0.2s ease, box-shadow 0.2s ease;
-                    }
-
-                    .button:hover {
-                        transform: translateY(-1px);
-                        box-shadow: 0 18px 36px rgba(64, 0, 16, 0.18);
-                    }
-
-                    .pill-group {
-                        display: flex;
-                        gap: 12px;
-                        flex-wrap: wrap;
-                    }
-
-                    .pill {
-                        padding: 10px 16px;
-                        border-radius: 999px;
-                        border: 1px solid rgba(115, 125, 145, 0.18);
-                        background: white;
-                        color: #191c1e;
-                        font-weight: 700;
-                        cursor: pointer;
-                    }
-
-                    .pill.active {
-                        background: var(--accent);
-                        color: white;
-                        border-color: transparent;
-                    }
-
-                    .info-card {
-                        display: grid;
-                        gap: 18px;
-                    }
-
-                    .info-card__row {
-                        display: flex;
-                        justify-content: space-between;
-                        gap: 12px;
-                        flex-wrap: wrap;
-                    }
-
-                    .info-card__badge {
-                        display: inline-flex;
-                        align-items: center;
-                        gap: 8px;
-                        padding: 10px 14px;
-                        border-radius: 16px;
-                        background: #eef1f5;
-                        color: var(--secondary);
-                        font-weight: 700;
-                    }
-
-                    .history-card {
-                        display: grid;
-                        gap: 18px;
-                    }
-
-                    .secondary-button {
-                        display: inline-flex;
-                        align-items: center;
-                        justify-content: center;
-                        padding: 14px 20px;
-                        border-radius: 18px;
-                        border: 1px solid rgba(64, 0, 16, 0.2);
-                        background: #ffffff;
-                        color: var(--accent);
-                        font-weight: 700;
-                        cursor: pointer;
-                    }
-
-                    .history-item {
-                        padding: 18px 20px;
-                        border-radius: 20px;
-                        background: #f9fafb;
-                        border: 1px solid rgba(227, 232, 240, 0.95);
-                    }
-
-                    .history-item strong {
-                        display: block;
-                        margin-bottom: 8px;
-                    }
-
-                    .history-item span {
-                        color: var(--secondary);
-                        font-size: 0.96rem;
-                    }
-
-                    .panel__content {
-                        color: var(--secondary);
-                        line-height: 1.75;
-                        white-space: pre-wrap;
-                    }
-
-                    .meta-label {
-                        text-transform: uppercase;
-                        letter-spacing: 0.16em;
-                        font-size: 0.79rem;
-                        color: var(--secondary);
-                        font-weight: 700;
-                    }
-
-                    @media (max-width: 960px) {
-                        .main-grid {
-                            grid-template-columns: 1fr;
-                        }
-                    }
-
-                    @media (max-width: 680px) {
-                        .site-shell {
-                            padding: 22px 18px 32px;
-                        }
-
-                        .hero {
-                            padding: 28px;
-                        }
-                    }
+                    /* ── Responsive ───────────────────────────────────── */
+                    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+                    @media (max-width: 640px) { .shell { padding: 18px 14px 32px; } .hero { padding: 24px; } }
                 </style>
             </head>
             <body>
-                <div class="site-shell">
-                    <div class="topbar">
+                <div class="shell">
+                    <!-- Top bar -->
+                    <header class="topbar">
                         <div class="brand">
                             <div class="brand__mark">B</div>
                             <div>
-                                <p class="brand__title">BisayaHub</p>
-                                <p class="brand__subtitle">Refined translation, ASR, and speech tooling for Butuanon.</p>
+                                <div class="brand__title">BisayaHub</div>
+                                <div class="brand__sub">Butuanon NLP Platform</div>
                             </div>
                         </div>
-                        <div class="nav-links">
-                            <a href="#" class="active">Translate</a>
-                            <a href="#">Dictionary</a>
-                            <a href="#">Voice Lab</a>
-                        </div>
-                    </div>
+                        <nav class="nav-links">
+                            <a href="#translate-section" class="active">Translate</a>
+                            <a href="#speech-section">Speech</a>
+                        </nav>
+                    </header>
 
+                    <!-- Hero -->
                     <section class="hero">
-                        <span class="badge">Linguistic Precision</span>
-                        <h1>Translate, transcribe, and speak Bisaya with a single toolkit.</h1>
-                        <p>Explore a premium language workspace designed for clarity, accuracy, and modern editorial presentation. The UI routes tasks to translation, speech-to-text, and text-to-speech models through a shared backend registry.</p>
+                        <span class="tag tag--live" style="margin-bottom:14px;">&#x2713; Live Models</span>
+                        <h1>Translate and speak Butuanon with real AI.</h1>
+                        <p>Type English text to get a Cebuano translation from NLLB-200. Upload audio for Whisper transcription. Generate speech with MMS-TTS. Everything runs locally on your machine.</p>
                     </section>
 
-                    <div class="main-grid">
-                        <div class="section-grid">
+                    <!-- Main grid -->
+                    <div class="grid">
+
+                        <!-- LEFT COLUMN: Translation -->
+                        <div class="col" id="translate-section">
+
+                            <!-- Input card -->
                             <section class="card">
-                                <div class="info-card">
-                                    <div class="info-card__row">
-                                        <div>
-                                            <p class="meta-label">Translation</p>
-                                            <h2>Text translation</h2>
-                                        </div>
-                                        <span class="info-card__badge">NLLB</span>
+                                <div class="card__head">
+                                    <div>
+                                        <p class="lbl">Translation</p>
+                                        <h2>English → Cebuano</h2>
                                     </div>
-                                    <div class="field-group">
-                                        <select id="backend-select" class="select-field"></select>
-                                        <textarea id="source-text" class="textarea-field" placeholder="Type English or Bisaya here..."></textarea>
-                                    </div>
-                                    <div class="button-row">
-                                        <button id="translate-button" class="button">Translate</button>
-                                    </div>
+                                    <span class="tag tag--live">NLLB-200</span>
+                                </div>
+                                <select id="backend-select" class="sel"></select>
+                                <textarea id="source-text" class="txa" placeholder="Type or paste English text here…"></textarea>
+                                <div class="btns">
+                                    <button id="translate-btn" class="btn">Translate</button>
                                 </div>
                             </section>
 
+                            <!-- Translation output -->
                             <section class="card">
-                                <div class="info-card">
-                                    <div class="info-card__row">
-                                        <div>
-                                            <p class="meta-label">Output</p>
-                                            <h2>Hubad result</h2>
-                                        </div>
-                                        <span class="info-card__badge">Live</span>
+                                <div class="card__head">
+                                    <div>
+                                        <p class="lbl">Result</p>
+                                        <h2>Translation output</h2>
                                     </div>
-                                    <div class="panel__content" id="translation-output">Your translated output appears here.</div>
+                                    <span class="tag tag--muted">Live</span>
                                 </div>
+                                <div class="out out--result" id="translation-output">Translation will appear here…</div>
+                                <div id="token-display"></div>
                             </section>
 
-                            <section class="card">
-                                <div class="info-card">
-                                    <div class="info-card__row">
-                                        <div>
-                                            <p class="meta-label">Phonetic guide</p>
-                                            <h2>Glottal and sound hints</h2>
-                                        </div>
-                                        <span class="info-card__badge">Preview</span>
+                            <!-- Phonetic guide -->
+                            <section class="card" id="phonetic-card" style="display:none;">
+                                <div class="card__head">
+                                    <div>
+                                        <p class="lbl">Phonetic guide</p>
+                                        <h2>Glottal stop annotations</h2>
                                     </div>
-                                    <div class="panel__content" id="phonetic-output">Glottal markers, phonetic hints, and reading guidance will appear here after translation.</div>
+                                    <span class="tag tag--accent">ʔ</span>
                                 </div>
+                                <div class="phon" id="phonetic-output"></div>
+                                <p class="out" style="font-size:0.82rem;">
+                                    Butuanon marks glottal stops with apostrophes or hyphens between letters
+                                    (e.g. <em>dal-a</em> → <em>dalʔa</em>). This guide shows where they occur.
+                                </p>
                             </section>
                         </div>
 
-                        <aside class="section-grid">
-                            <section class="card history-card">
-                                <div>
-                                    <p class="meta-label">Voice Lab</p>
-                                    <h2>Whisper + VITS</h2>
+                        <!-- RIGHT COLUMN: Speech + Info -->
+                        <div class="col" id="speech-section">
+
+                            <!-- Speech-to-Text -->
+                            <section class="card">
+                                <div class="card__head">
+                                    <div>
+                                        <p class="lbl">Speech-to-Text</p>
+                                        <h2>Transcribe audio</h2>
+                                    </div>
+                                    <span class="tag tag--muted">Whisper</span>
                                 </div>
-                                <div class="panel__content">
-                                    <p>Use Whisper for transcription and VITS for speech synthesis. This panel lets you simulate ASR/TTS flows from the same page.</p>
+                                <p class="out">Upload an audio file or record from your microphone, and Whisper will transcribe the speech to text.</p>
+                                <div class="upload" id="upload-area">
+                                    <span id="upload-label">Drop an audio file here or click to browse</span>
+                                    <input type="file" id="audio-file" accept="audio/*" />
                                 </div>
-                                <div class="field-group">
-                                    <label class="meta-label" for="audio-path">Audio source</label>
-                                    <input id="audio-path" class="text-field" placeholder="audio/sample.wav" />
+                                <div class="btns">
+                                    <button id="record-btn" class="btn--outline btn">Record Mic</button>
+                                    <button id="transcribe-btn" class="btn--outline btn">Transcribe</button>
                                 </div>
-                                <div class="field-group">
-                                    <label class="meta-label" for="task-select">Training task</label>
-                                    <select id="task-select" class="select-field">
-                                        <option value="translation">Translation</option>
-                                        <option value="asr">ASR</option>
-                                        <option value="tts">TTS</option>
-                                    </select>
-                                </div>
-                                <div class="button-row">
-                                    <button id="transcribe-button" class="secondary-button">Transcribe</button>
-                                    <button id="synthesize-button" class="secondary-button">Synthesize</button>
-                                    <button id="demo-button" class="button">Run Demo</button>
-                                </div>
-                                <div class="panel__content" id="speech-output">Transcription and speech synthesis responses appear here.</div>
+                                <div class="out" id="asr-output">Transcription result will appear here.</div>
                             </section>
 
-                            <section class="card history-card">
-                                <div>
-                                    <p class="meta-label">Training</p>
-                                    <h2>Start a workflow</h2>
+                            <!-- Text-to-Speech -->
+                            <section class="card">
+                                <div class="card__head">
+                                    <div>
+                                        <p class="lbl">Text-to-Speech</p>
+                                        <h2>Generate voice</h2>
+                                    </div>
+                                    <span class="tag tag--muted">MMS-TTS</span>
                                 </div>
-                                <div class="panel__content">
-                                    Launch a task-specific training scaffold for translation, ASR, or TTS using the same backend registry that powers the app.
+                                <p class="out">Type text below and generate an audio clip. The model currently speaks in Cebuano (closest available) — Butuanon voice training is a future milestone.</p>
+                                <input id="tts-text" class="inp" placeholder="Type text to speak aloud…" value="Maayong buntag" />
+                                <div class="btns">
+                                    <button id="synthesize-btn" class="btn--outline btn">Speak</button>
                                 </div>
-                                <div class="button-row">
-                                    <button id="train-button" class="button">Train</button>
-                                </div>
-                                <div class="panel__content" id="training-output">Training workflow details will appear here.</div>
+                                <div class="out" id="tts-output"></div>
+                                <div id="audio-player"></div>
                             </section>
 
-                            <section class="card history-card">
-                                <div>
-                                    <p class="meta-label">System</p>
-                                    <h2>Architecture</h2>
+                            <!-- Architecture (compact) -->
+                            <section class="card">
+                                <div class="card__head">
+                                    <div>
+                                        <p class="lbl">Models</p>
+                                        <h2>What powers this</h2>
+                                    </div>
                                 </div>
-                                <div class="panel__content">
-                                    NLLB handles translation. Whisper is the ASR model. VITS is the TTS model.
-                                    <br /><br />
-                                    The web app routes each UI action to the appropriate backend through shared registry logic, so the browser can remain lightweight while the model stack stays organized.
-                                </div>
+                                <ul class="arch-list">
+                                    <li><strong>NLLB-200</strong> Translates English → Cebuano (closest to Butuanon)</li>
+                                    <li><strong>Whisper</strong> Transcribes audio to text (speech recognition)</li>
+                                    <li><strong>MMS-TTS</strong> Converts text to spoken audio (voice synthesis)</li>
+                                </ul>
+                                <p class="out" style="font-size:0.82rem;">Models load on first use and are cached. GPU acceleration is automatic when CUDA is available.</p>
                             </section>
 
-                            <section class="card history-card">
-                                <div>
-                                    <p class="meta-label">History</p>
-                                    <h2>Recent activity</h2>
+                            <!-- Activity -->
+                            <section class="card">
+                                <div class="card__head">
+                                    <div>
+                                        <p class="lbl">Activity</p>
+                                        <h2>Recent</h2>
+                                    </div>
                                 </div>
-                                <div class="history-item">
-                                    <strong>Maayong buntag</strong>
-                                    <span>Translated using NLLB</span>
-                                </div>
-                                <div class="history-item">
-                                    <strong>Salamat</strong>
-                                    <span>Text-to-speech generated with VITS</span>
+                                <div id="history-list">
+                                    <div class="hist">
+                                        <strong>Ready</strong>
+                                        <span>Waiting for first interaction…</span>
+                                    </div>
                                 </div>
                             </section>
-                        </aside>
+                        </div>
                     </div>
                 </div>
 
                 <script>
-                    const backendSelect = document.getElementById('backend-select');
-                    const translateButton = document.getElementById('translate-button');
-                    const sourceText = document.getElementById('source-text');
-                    const translationOutput = document.getElementById('translation-output');
-                    const phoneticOutput = document.getElementById('phonetic-output');
-                    const audioPath = document.getElementById('audio-path');
-                    const transcribeButton = document.getElementById('transcribe-button');
-                    const synthesizeButton = document.getElementById('synthesize-button');
-                    const speechOutput = document.getElementById('speech-output');
-                    const trainButton = document.getElementById('train-button');
-                    const trainingOutput = document.getElementById('training-output');
-                    const taskSelect = document.getElementById('task-select');
-                    const demoButton = document.getElementById('demo-button');
+                    // -- DOM refs --
+                    const $ = id => document.getElementById(id);
+                    const backendSel  = $('backend-select');
+                    const srcText     = $('source-text');
+                    const translateBtn = $('translate-btn');
+                    const transOut    = $('translation-output');
+                    const tokenDisp   = $('token-display');
+                    const phonCard    = $('phonetic-card');
+                    const phonOut     = $('phonetic-output');
+                    const audioFile   = $('audio-file');
+                    const uploadArea  = $('upload-area');
+                    const uploadLabel = $('upload-label');
+                    const transcribeBtn = $('transcribe-btn');
+                    const asrOut      = $('asr-output');
+                    const ttsText     = $('tts-text');
+                    const synthBtn    = $('synthesize-btn');
+                    const ttsOut      = $('tts-output');
+                    const audioPlayer = $('audio-player');
+                    const histList    = $('history-list');
+                    const recordBtn   = $('record-btn');
+                    let mediaRecorder = null;
+                    let audioChunks = [];
 
-                    async function loadBackends() {
-                        const response = await fetch('/api/backends');
-                        const payload = await response.json();
-                        backendSelect.innerHTML = payload.translation
-                            .map(name => `<option value="${name}">${name.toUpperCase()}</option>`)
-                            .join('');
+                    // -- Helpers --
+                    function spin(btn, on, label) {
+                        btn.disabled = on;
+                        if (on) {
+                            btn.dataset.orig = btn.textContent;
+                            const dark = btn.classList.contains('btn--outline');
+                            btn.innerHTML = `<span class="spin ${dark?'spin--dark':''}"></span> Working…`;
+                        } else {
+                            btn.textContent = label || btn.dataset.orig || 'Done';
+                        }
                     }
 
-                    async function postJson(path, data) {
-                        const response = await fetch(path, {
+                    function addHist(title, detail) {
+                        const d = document.createElement('div');
+                        d.className = 'hist';
+                        d.innerHTML = `<strong>${title}</strong><span>${detail}</span>`;
+                        histList.prepend(d);
+                        while (histList.children.length > 5) histList.removeChild(histList.lastChild);
+                    }
+
+                    async function post(url, data) {
+                        const r = await fetch(url, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(data),
                         });
-                        return response.json();
+                        return r.json();
                     }
 
-                    translateButton.addEventListener('click', async () => {
-                        const text = sourceText.value.trim();
-                        const backend = backendSelect.value;
-                        const result = await postJson('/api/translate', { text, backend });
-                        translationOutput.textContent = result.translation;
-                        phoneticOutput.textContent = result.phonetic_guide || 'No phonetic guide available yet.';
+                    // -- Load backends --
+                    fetch('/api/backends').then(r => r.json()).then(d => {
+                        backendSel.innerHTML = d.translation
+                            .map(n => `<option value="${n}">${n.toUpperCase()}</option>`)
+                            .join('');
+                    }).catch(console.error);
+
+                    // -- File upload visual --
+                    audioFile.addEventListener('change', () => {
+                        if (audioFile.files.length) {
+                            uploadLabel.textContent = audioFile.files[0].name;
+                            uploadArea.classList.add('ok');
+                        } else {
+                            uploadLabel.textContent = 'Drop an audio file here or click to browse';
+                            uploadArea.classList.remove('ok');
+                        }
                     });
 
-                    transcribeButton.addEventListener('click', async () => {
-                        const path = audioPath.value.trim();
-                        const result = await postJson('/api/asr', { audio_path: path, backend: 'whisper' });
-                        speechOutput.textContent = result.output;
+                    // -- Translate --
+                    translateBtn.addEventListener('click', async () => {
+                        const text = srcText.value.trim();
+                        if (!text) return;
+                        spin(translateBtn, true);
+                        transOut.textContent = 'Translating… (first run downloads the model)';
+                        phonCard.style.display = 'none';
+                        tokenDisp.innerHTML = '';
+
+                        try {
+                            const r = await post('/api/translate', { text, backend: backendSel.value });
+                            transOut.textContent = r.translation || r.error || '';
+
+                            // Phonetic guide — only show if there are actual glottal annotations
+                            if (r.phonetic_guide) {
+                                phonOut.textContent = r.phonetic_guide;
+                                phonCard.style.display = '';
+                            }
+
+                            // Token chips
+                            if (r.tokens && r.tokens.length) {
+                                tokenDisp.innerHTML =
+                                    '<p class="lbl" style="margin-bottom:6px;">Tokens</p>' +
+                                    '<div class="chips">' +
+                                    r.tokens.map(t => `<span class="chip">${t}</span>`).join('') +
+                                    '</div>';
+                            }
+                            addHist(r.translation?.slice(0,35) || 'Translation', `via ${backendSel.value.toUpperCase()}`);
+                            
+                            if (r.translation) {
+                                ttsText.value = r.translation;
+                                synthBtn.click();
+                            }
+                        } catch(e) {
+                            transOut.textContent = 'Error: ' + e.message;
+                        }
+                        spin(translateBtn, false, 'Translate');
+                    });
+                    
+                    // -- Record (Mic) --
+                    recordBtn.addEventListener('click', async () => {
+                        if (mediaRecorder && mediaRecorder.state === 'recording') {
+                            mediaRecorder.stop();
+                            recordBtn.textContent = 'Record Mic';
+                            recordBtn.style.color = '';
+                            recordBtn.style.borderColor = '';
+                        } else {
+                            try {
+                                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                                mediaRecorder = new MediaRecorder(stream);
+                                audioChunks = [];
+                                
+                                mediaRecorder.addEventListener('dataavailable', event => {
+                                    audioChunks.push(event.data);
+                                });
+                                
+                                mediaRecorder.addEventListener('stop', () => {
+                                    const recordedBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                                    const file = new File([recordedBlob], "recording.webm", { type: "audio/webm" });
+                                    
+                                    const dataTransfer = new DataTransfer();
+                                    dataTransfer.items.add(file);
+                                    audioFile.files = dataTransfer.files;
+                                    
+                                    uploadLabel.textContent = "recording.webm (Ready to transcribe)";
+                                    uploadArea.classList.add('ok');
+                                    
+                                    stream.getTracks().forEach(track => track.stop());
+                                });
+                                
+                                mediaRecorder.start();
+                                recordBtn.textContent = 'Stop Recording';
+                                recordBtn.style.color = '#ef4444';
+                                recordBtn.style.borderColor = '#ef4444';
+                                uploadLabel.textContent = "Recording...";
+                                uploadArea.classList.remove('ok');
+                            } catch (err) {
+                                alert("Could not access microphone: " + err.message);
+                            }
+                        }
                     });
 
-                    synthesizeButton.addEventListener('click', async () => {
-                        const text = sourceText.value.trim() || 'Maayong buntag';
-                        const result = await postJson('/api/tts', { text, backend: 'vits' });
-                        speechOutput.textContent = result.output;
+                    // -- Transcribe (ASR) --
+                    transcribeBtn.addEventListener('click', async () => {
+                        const file = audioFile.files?.[0];
+                        if (!file) { asrOut.textContent = 'Upload an audio file first.'; return; }
+                        spin(transcribeBtn, true);
+                        asrOut.textContent = 'Transcribing… (first run downloads Whisper)';
+                        try {
+                            const fd = new FormData();
+                            fd.append('audio', file);
+                            const resp = await fetch('/api/asr/upload', { method: 'POST', body: fd });
+                            const r = await resp.json();
+                            asrOut.textContent = r.output || r.error || 'No output.';
+                            addHist(r.output?.slice(0,35) || 'ASR', 'Transcribed via Whisper');
+                        } catch(e) {
+                            asrOut.textContent = 'Error: ' + e.message;
+                        }
+                        spin(transcribeBtn, false, 'Transcribe');
                     });
 
-                    trainButton.addEventListener('click', async () => {
-                        const task = taskSelect.value;
-                        const result = await postJson('/api/train', { task, max_samples: 3, epochs: 3 });
-                        trainingOutput.textContent = result.summary;
+                    // -- Synthesize (TTS) --
+                    synthBtn.addEventListener('click', async () => {
+                        const text = ttsText.value.trim() || 'Maayong buntag';
+                        spin(synthBtn, true);
+                        ttsOut.textContent = 'Generating speech… (first run downloads MMS-TTS)';
+                        audioPlayer.innerHTML = '';
+                        try {
+                            const r = await post('/api/tts', { text, backend: 'vits' });
+                            if (r.audio_url) {
+                                ttsOut.textContent = '';
+                                audioPlayer.innerHTML = `<audio controls autoplay src="${r.audio_url}"></audio>`;
+                            } else {
+                                ttsOut.textContent = r.output || 'Done.';
+                            }
+                            addHist(`TTS: ${text.slice(0,25)}`, 'via MMS-TTS');
+                        } catch(e) {
+                            ttsOut.textContent = 'Error: ' + e.message;
+                        }
+                        spin(synthBtn, false, 'Speak');
                     });
-
-                    demoButton.addEventListener('click', async () => {
-                        const result = await postJson('/api/demo', {
-                            text: sourceText.value.trim() || 'Where are you going?',
-                            audio_path: audioPath.value.trim() || 'clip.wav',
-                        });
-                        speechOutput.textContent = result.summary;
-                    });
-
-                    loadBackends().catch(console.error);
                 </script>
             </body>
             </html>
             '''
         )
+
+    # ── API routes ──────────────────────────────────────────────────────
 
     @app.route('/api/backends')
     def backends():
@@ -601,11 +601,13 @@ def create_app() -> Flask:
 
         translated = backend.translate(text)
         phonetic = phoneticize_text(translated)
+        tokens = tokenizer.tokenize(translated)
         return jsonify({
             'task': 'translation',
             'backend': backend_name,
             'translation': translated,
-            'phonetic_guide': phonetic or 'No phonetic guide available.',
+            'phonetic_guide': phonetic or '',
+            'tokens': tokens,
         })
 
     @app.route('/api/asr', methods=['POST'])
@@ -618,6 +620,33 @@ def create_app() -> Flask:
             return jsonify({'error': f'Backend {backend_name} is not available for ASR'}), 400
         return jsonify({'task': 'asr', 'backend': backend_name, 'output': backend.transcribe(audio_path)})
 
+    @app.route('/api/asr/upload', methods=['POST'])
+    def asr_upload():
+        """Accept an uploaded audio file and run Whisper on it."""
+        if 'audio' not in request.files:
+            return jsonify({'error': 'No audio file provided'}), 400
+        audio = request.files['audio']
+        if not audio.filename:
+            return jsonify({'error': 'Empty filename'}), 400
+
+        ext = Path(audio.filename).suffix or '.wav'
+        fd, tmp_path = tempfile.mkstemp(suffix=ext, dir=str(_UPLOAD_DIR))
+        os.close(fd)
+        audio.save(tmp_path)
+
+        backend = registry.get('whisper')
+        if not backend or not isinstance(backend, SpeechModel):
+            return jsonify({'error': 'Whisper backend not available'}), 500
+
+        result_text = backend.transcribe(tmp_path)
+
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+        return jsonify({'task': 'asr', 'backend': 'whisper', 'output': result_text})
+
     @app.route('/api/tts', methods=['POST'])
     def tts():
         payload = request.get_json(force=True) or {}
@@ -626,7 +655,28 @@ def create_app() -> Flask:
         backend = registry.get(backend_name)
         if not backend or not isinstance(backend, SpeechModel):
             return jsonify({'error': f'Backend {backend_name} is not available for TTS'}), 400
-        return jsonify({'task': 'tts', 'backend': backend_name, 'output': backend.synthesize(text)})
+
+        result = backend.synthesize(text)
+
+        if os.path.isfile(result):
+            filename = Path(result).name
+            return jsonify({
+                'task': 'tts',
+                'backend': backend_name,
+                'audio_url': f'/api/tts/audio/{filename}',
+                'output': f'Audio generated: {filename}',
+            })
+
+        return jsonify({'task': 'tts', 'backend': backend_name, 'output': result})
+
+    @app.route('/api/tts/audio/<filename>')
+    def tts_audio(filename):
+        """Serve a generated TTS WAV file."""
+        tmp_dir = tempfile.gettempdir()
+        path = Path(tmp_dir) / filename
+        if not path.exists():
+            return jsonify({'error': 'Audio file not found'}), 404
+        return send_file(str(path), mimetype='audio/wav')
 
     @app.route('/api/train', methods=['POST'])
     def train():
@@ -643,21 +693,9 @@ def create_app() -> Flask:
         text = payload.get('text', 'Where are you going?')
         audio_path = payload.get('audio_path', 'clip.wav')
 
-        translation_model = TranslationModel(
-            model_name='nllb',
-            use_huggingface=True,
-            adapter=HuggingFaceAdapter('facebook/nllb-200-distilled-600M', task='translation'),
-        )
-        asr_model = SpeechModel(
-            model_name='whisper',
-            use_huggingface=True,
-            adapter=HuggingFaceAdapter('openai/whisper-tiny', task='asr'),
-        )
-        tts_model = SpeechModel(
-            model_name='vits',
-            use_huggingface=True,
-            adapter=HuggingFaceAdapter('facebook/mms-tts-eng', task='tts'),
-        )
+        translation_model = registry.get('nllb')
+        asr_model = registry.get('whisper')
+        tts_model = registry.get('vits')
 
         summary_lines = [
             f"Translation: {translation_model.translate(text)}",
