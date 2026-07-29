@@ -276,7 +276,7 @@ class SpeechModel:
             # primary: transformers pipeline
             if self._asr_pipeline is not None:
                 try:
-                    result = self._asr_pipeline(audio_path, generate_kwargs={"task": task})
+                    result = self._asr_pipeline(audio_path, generate_kwargs={"task": task, "language": "cebuano"})
                     return result.get("text", "")
                 except Exception as exc:
                     log.error("ASR pipeline error: %s", exc)
@@ -284,7 +284,7 @@ class SpeechModel:
             # fallback: openai-whisper
             if self._whisper_fallback is not None:
                 try:
-                    result = self._whisper_fallback.transcribe(audio_path, task=task)
+                    result = self._whisper_fallback.transcribe(audio_path, task=task, language="cebuano")
                     return result.get("text", "")
                 except Exception as exc:
                     log.error("openai-whisper error: %s", exc)
