@@ -546,8 +546,12 @@ def create_app() -> Flask:
                             fd.append('audio', file);
                             const resp = await fetch('/api/asr/upload', { method: 'POST', body: fd });
                             const r = await resp.json();
-                            asrOut.textContent = r.output || r.error || 'No output.';
-                            addHist(r.output?.slice(0,35) || 'ASR', 'Transcribed via Whisper');
+                            if (r.error) {
+                                asrOut.textContent = r.error;
+                            } else {
+                                asrOut.innerHTML = `<strong>Transcription (Cebuano):</strong> ${r.transcription || 'None'}<br><br><strong>Translation (English):</strong> ${r.translation || 'None'}`;
+                                addHist(r.transcription?.slice(0,35) || 'ASR', 'Transcribed via Whisper');
+                            }
                         } catch(e) {
                             asrOut.textContent = 'Error: ' + e.message;
                         }
@@ -638,14 +642,15 @@ def create_app() -> Flask:
         if not backend or not isinstance(backend, SpeechModel):
             return jsonify({'error': 'Whisper backend not available'}), 500
 
-        result_text = backend.transcribe(tmp_path)
+        transcription = backend.transcribe(tmp_path, task="transcribe")
+        translation = backend.transcribe(tmp_path, task="translate")
 
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
 
-        return jsonify({'task': 'asr', 'backend': 'whisper', 'output': result_text})
+        return jsonify({'transcription': transcription, 'translation': translation})
 
     @app.route('/api/tts', methods=['POST'])
     def tts():

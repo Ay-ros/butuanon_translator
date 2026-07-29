@@ -269,14 +269,14 @@ class SpeechModel:
                 log.error("openai-whisper load failed: %s", exc)
         return False
 
-    def transcribe(self, audio_path: str) -> str:
+    def transcribe(self, audio_path: str, task: str = "transcribe") -> str:
         adapter_name = self.adapter.name if self.adapter else self.model_name
 
         if self.use_huggingface and self._ensure_asr_loaded():
             # primary: transformers pipeline
             if self._asr_pipeline is not None:
                 try:
-                    result = self._asr_pipeline(audio_path)
+                    result = self._asr_pipeline(audio_path, generate_kwargs={"task": task})
                     return result.get("text", "")
                 except Exception as exc:
                     log.error("ASR pipeline error: %s", exc)
@@ -284,7 +284,7 @@ class SpeechModel:
             # fallback: openai-whisper
             if self._whisper_fallback is not None:
                 try:
-                    result = self._whisper_fallback.transcribe(audio_path)
+                    result = self._whisper_fallback.transcribe(audio_path, task=task)
                     return result.get("text", "")
                 except Exception as exc:
                     log.error("openai-whisper error: %s", exc)
