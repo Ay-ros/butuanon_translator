@@ -1129,6 +1129,7 @@ def create_app() -> Flask:
         audio.save(tmp_path)
 
         backend = registry.get("whisper")
+        translator = registry.get("nllb")
         if not backend or not isinstance(backend, SpeechModel):
             return jsonify({"error": "Whisper backend not available"}), 500
 
