@@ -217,8 +217,6 @@ HOME_TEMPLATE = """
         }
 
         .mode-pill select {
-            max-width: 90px;
-            appearance: none;
             border: 0;
             outline: 0;
             background: transparent;
@@ -836,23 +834,6 @@ HOME_TEMPLATE = """
                 <p class="lbl">What Powers This</p>
                 <p>BisayaHub is a professional linguistic laboratory leveraging state-of-the-art AI models for the Cebuano (Bisaya) language.</p>
                 <div id="history-list"></div>
-            </section>
-
-            <section class="info-block">
-                <p class="lbl">Core Models</p>
-                <ul class="arch-list">
-                    <li><strong>NLLB-200:</strong> High-quality translation</li>
-                    <li><strong>Whisper:</strong> Robust speech recognition</li>
-                    <li><strong>MMS-TTS:</strong> Voice synthesis</li>
-                </ul>
-                <p>Models load on first use and are cached. GPU acceleration is automatic when CUDA is available.</p>
-            </section>
-
-            <section class="info-block">
-                <p class="lbl">Resources</p>
-                <a href="/api/backends">Model backends</a>
-                <a href="#speech-section">Speech tools</a>
-                <a href="#translate-section">Text tools</a>
             </section>
         </footer>
     </main>
