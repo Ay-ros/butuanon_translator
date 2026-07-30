@@ -170,17 +170,22 @@ class TranslationModel:
 
     # -- public API ----------------------------------------------------------
 
-    def translate(self, text: str) -> str:
+    def translate(self, text: str, source_lang: Optional[str] = None, target_lang: Optional[str] = None) -> str:
         if not text:
             return ""
 
         if self.use_huggingface and self._ensure_loaded():
             try:
+                src = source_lang or self.source_lang
+                tgt = target_lang or self.target_lang
+                
+                self._tok_wrapper.hf_tokenizer.src_lang = src
                 inputs = self._tok_wrapper.encode(text)
+                
                 if self.device == "cuda":
                     inputs = {k: v.to("cuda") for k, v in inputs.items()}
 
-                forced_bos = self._tok_wrapper.get_target_token_id()
+                forced_bos = self._tok_wrapper.hf_tokenizer.convert_tokens_to_ids(tgt)
                 outputs = self._hf_model.generate(
                     **inputs,
                     forced_bos_token_id=forced_bos,
@@ -276,7 +281,7 @@ class SpeechModel:
             # primary: transformers pipeline
             if self._asr_pipeline is not None:
                 try:
-                    result = self._asr_pipeline(audio_path, generate_kwargs={"task": task, "language": "cebuano"})
+                    result = self._asr_pipeline(audio_path, generate_kwargs={"task": task})
                     return result.get("text", "")
                 except Exception as exc:
                     log.error("ASR pipeline error: %s", exc)
@@ -284,7 +289,7 @@ class SpeechModel:
             # fallback: openai-whisper
             if self._whisper_fallback is not None:
                 try:
-                    result = self._whisper_fallback.transcribe(audio_path, task=task, language="cebuano")
+                    result = self._whisper_fallback.transcribe(audio_path, task=task)
                     return result.get("text", "")
                 except Exception as exc:
                     log.error("openai-whisper error: %s", exc)
