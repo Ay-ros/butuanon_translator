@@ -727,9 +727,11 @@ HOME_TEMPLATE = """
                     <div class="card__head">
                         <p class="lbl" id="text-translation-title">Text Translation</p>
                         <div class="mode-pill">
-                            <select id="backend-select" aria-label="Translation backend"></select>
-                            <span aria-hidden="true">-></span>
-                            <span>Butuanon</span>
+                            <select id="backend-select" aria-label="Translation backend" style="display:none;"></select>
+                            <select id="langDir" aria-label="Translation direction" style="background:transparent; border:none; font-weight:800; color:inherit; font-size:inherit; cursor:pointer;">
+                                <option value="eng-ceb">English to Cebuano</option>
+                                <option value="ceb-eng">Cebuano to English</option>
+                            </select>
                         </div>
                     </div>
                     <textarea id="source-text" class="txa" placeholder="Type text to translate..."></textarea>
@@ -938,7 +940,8 @@ HOME_TEMPLATE = """
             tokenDisp.innerHTML = '';
 
             try {
-                const r = await post('/api/translate', { text, backend: backendSel.value });
+                const direction = document.getElementById('langDir').value;
+                const r = await post('/api/translate', { text, backend: backendSel.value, direction });
                 transOut.textContent = r.translation || r.error || '';
                 transOut.classList.toggle('has-text', Boolean(r.translation));
 
@@ -1014,6 +1017,7 @@ HOME_TEMPLATE = """
             try {
                 const fd = new FormData();
                 fd.append('audio', file);
+                fd.append('direction', document.getElementById('langDir').value);
                 const resp = await fetch('/api/asr/upload', { method: 'POST', body: fd });
                 const r = await resp.json();
                 if (r.error) {
@@ -1088,11 +1092,15 @@ def create_app() -> Flask:
         payload = request.get_json(force=True) or {}
         text = payload.get("text", "")
         backend_name = payload.get("backend", "nllb")
+        direction = payload.get("direction", "eng-ceb")
         backend = registry.get(backend_name)
         if not backend or not isinstance(backend, TranslationModel):
             return jsonify({"error": f"Backend {backend_name} is not available for translation"}), 400
 
-        translated = backend.translate(text)
+        source_lang = "ceb_Latn" if direction == "ceb-eng" else "eng_Latn"
+        target_lang = "eng_Latn" if direction == "ceb-eng" else "ceb_Latn"
+
+        translated = backend.translate(text, source_lang=source_lang, target_lang=target_lang)
         phonetic = phoneticize_text(translated)
         tokens = tokenizer.tokenize(translated)
         return jsonify(
@@ -1133,10 +1141,14 @@ def create_app() -> Flask:
         if not backend or not isinstance(backend, SpeechModel):
             return jsonify({"error": "Whisper backend not available"}), 500
 
+        direction = request.form.get("direction", "ceb-eng")
+        source_lang = "eng_Latn" if direction == "eng-ceb" else "ceb_Latn"
+        target_lang = "ceb_Latn" if direction == "eng-ceb" else "eng_Latn"
+
         transcription = backend.transcribe(tmp_path, task="transcribe")
         translation = ""
         if translator and isinstance(translator, TranslationModel):
-            translation = translator.translate(transcription, source_lang="ceb_Latn", target_lang="eng_Latn")
+            translation = translator.translate(transcription, source_lang=source_lang, target_lang=target_lang)
 
         try:
             os.unlink(tmp_path)
