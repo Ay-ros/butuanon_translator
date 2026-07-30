@@ -226,6 +226,13 @@ HOME_TEMPLATE = """
             cursor: pointer;
         }
 
+        .mode-pill select option {
+            background: var(--panel);
+            color: var(--text);
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
         .tag {
             display: inline-flex;
             align-items: center;
